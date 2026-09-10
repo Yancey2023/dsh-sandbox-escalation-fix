@@ -8,10 +8,16 @@
 # 4. publishConfig 已在 package.json 中固定 registry 为 registry.npmjs.org、
 #    访问级别为 public、dist-tag 为 next，所以这里直接执行 npm publish 即可。
 #
+# 包管理器说明（pnpm 12）：
+# - package.json 的 packageManager 字段钉死 pnpm@12.3.4（与 dsh 官方 devEngines 一致），
+#   由 corepack 按该字段启用对应版本的 pnpm，安装/测试/构建全部走 pnpm。
+# - 发布步保留 npm publish：Trusted Publishing 的 OIDC 换取与 provenance 生成是
+#   npm CLI 的能力（npm >= 11.5.1），pnpm publish 不会执行该 OIDC 交换，因此不替换。
+#
 # 会影响的功能：
 # - 该文件一旦推送到默认分支，npmjs.com 上为该包配置 Trusted Publisher 时，
 #   "Workflow filename" 必须填写 publish-npm.yml，且大小写完全一致。
-# - 工作流内的 npm ci / npm test / npm run build 失败时不会发布，保证线上包可构建可测试。
+# - 工作流内的 pnpm install / pnpm test / pnpm build 失败时不会发布，保证线上包可构建可测试。
 name: Publish to npm
 
 on:
@@ -43,15 +49,20 @@ jobs:
           # 发布构建严禁使用依赖缓存，避免缓存污染影响产物一致性。
           package-manager-cache: false
 
+      - name: Enable pnpm
+        # corepack 按 packageManager 字段（pnpm@12.3.4）启用对应版本的 pnpm。
+        run: corepack enable
+
       - name: Install dependencies
-        # 使用 npm ci 严格按 package-lock.json 安装，保证发布产物可复现。
-        run: npm ci --ignore-scripts --no-audit --no-fund
+        # 使用 pnpm 严格按 pnpm-lock.yaml 安装（--frozen-lockfile），
+        # 保证发布产物可复现；--ignore-scripts 与原先 npm ci 的行为保持一致。
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Run tests
-        run: npm test
+        run: pnpm test
 
       - name: Build
-        run: npm run build
+        run: pnpm build
 
       - name: Check whether this version is already published
         # 首次建包必须由维护者人工完成（Trusted Publishing 要求包已存在），
@@ -71,5 +82,7 @@ jobs:
         # 虽然 package.json 的 publishConfig 也声明了 tag，但不同 npm 版本对它的支持不完全一致，
         # 命令行参数优先级最高，因此这里再显式写一次，保证发布标签确定。
         # 使用 Trusted Publishing 时 npm 会自动生成 provenance，无需 --provenance。
+        # 保留 npm publish 而非 pnpm publish：OIDC 交换与 provenance 由 npm CLI 完成
+        # （见文件头"包管理器说明"）。
         if: steps.check.outputs.published == 'false'
         run: npm publish --tag next
